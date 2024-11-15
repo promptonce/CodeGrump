@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Grump - AI Code Reviewer</title>
+    
+    <!-- 引入 CodeMirror 的样式和脚本 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.7/codemirror.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.7/codemirror.min.js"></script>
+    <!-- 引入对应语言的语法高亮支持 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.7/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.7/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.7/mode/clike/clike.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.7/mode/ruby/ruby.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .CodeMirror {
+            height: 300px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .response {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+        }
+        .loading {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #ccc;
+            border-radius: 50%;
+            border-top-color: #333;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .language-select {
+            margin-bottom: 10px;
+        }
+        .variables {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #eef;
+            border: 1px solid #ccc;
+        }
+        .variables p {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Code Grump - AI Code Reviewer & High Quality Code Pratice[注意：不要粘贴大段代码，监听会多次触发，后续优化]</h1>
+    
+    <!-- 添加编程语言选择框 -->
+    <div class="language-select">
+        <label for="language">Select Language:</label>
+        <select id="language">
+            <option value="javascript">JavaScript</option>
+            <option value="python">Python</option>
+            <option value="java">Java</option>
+            <option value="cpp">C++</option>
+            <option value="ruby">Ruby</option>
+        </select>
+    </div>
+
+    <!-- 这个 div 将会被 CodeMirror 替换 -->
+    <textarea id="codeInput" placeholder="Write your code here..."></textarea>
+
+    <!-- 手动提交按钮 -->
+    <button id="manualSubmitBtn">Submit Manually</button>
+
+    <!-- 在页面中显示调试信息 -->
+    <div class="variables" id="variablesDisplay">
+        <h3>Debug Variables</h3>
+        <p>Space Threshold: <span id="spaceThresholdDisplay">10</span></p>
+        <p>Line Threshold: <span id="lineThresholdDisplay">3</span></p>
+        <p>Submission Count: <span id="submissionCountDisplay">1</span></p>
+        <p>Current Space Count: <span id="currentSpaceCount">0</span></p>
+        <p>Current Line Count: <span id="currentLineCount">0</span></p>
+    </div>
+    
+    <div id="response" class="response"></div>
+
+    <script>
+        let spaceCount = 0;
+        let lineCount = 0;
+        let inputBuffer = '';
+
+        // 初始的空格和行数阈值
+        let spaceThreshold = 10;
+        let lineThreshold = 3;
+
+        // 累计提交次数
+        let submissionCount = 1;
+
+        let isSubmitting = false;
+
+        // 初始化 CodeMirror 编辑器
+        const editor = CodeMirror.fromTextArea(document.getElementById('codeInput'), {
+            lineNumbers: true,
+            mode: 'javascript',  // 默认模式为 JavaScript
+            theme: 'default',
+            indentUnit: 4,
+            tabSize: 4,
+        });
+
+        const responseDiv = document.getElementById('response');
+        const manualSubmitBtn = document.getElementById('manualSubmitBtn');
+        const languageSelect = document.getElementById('language');
+
+        const spaceThresholdDisplay = document.getElementById('spaceThresholdDisplay');
+        const lineThresholdDisplay = document.getElementById('lineThresholdDisplay');
+        const submissionCountDisplay = document.getElementById('submissionCountDisplay');
+        const currentSpaceCountDisplay = document.getElementById('currentSpaceCount');
+        const currentLineCountDisplay = document.getElementById('currentLineCount');
+
+        // 监听 CodeMirror 的内容变化
+        editor.on('change', handleInput);
+
+        // 监听手动提交按钮的点击事件
+        manualSubmitBtn.addEventListener('click', handleManualSubmit);
+
+        // 监听语言选择器的变化，并更新 CodeMirror 的模式
+        languageSelect.addEventListener('change', handleLanguageChange);
+
+        function handleInput() {
+            const code = editor.getValue();
+
+            // 按行去掉行首的空格
+            const lines = code.split('\n').map(line => line.trimStart());
+
+            // 计算每行去掉行首空格后的空格数
+            spaceCount = lines.reduce((total, line) => total + (line.match(/ /g) || []).length, 0);
+            lineCount = lines.length;
+            inputBuffer = code;
+
+            // 更新调试信息
+            currentSpaceCountDisplay.textContent = spaceCount;
+            currentLineCountDisplay.textContent = lineCount;
+
+            // 使用成倍递增的阈值判断是否需要提交
+            if (spaceCount >= submissionCount * spaceThreshold && lineCount >= submissionCount * lineThreshold && !isSubmitting) {
+                submitCode();
+            }
+        }
+
+        // 手动提交代码函数，仅调用 submitCode，不影响计数器
+        function handleManualSubmit() {
+            if (!isSubmitting) {
+                submitCode();
+            }
+        }
+
+        // 切换 CodeMirror 编辑器的编程语言模式
+        function handleLanguageChange() {
+            const language = languageSelect.value;
+            let mode = 'javascript';  // 默认模式
+
+            if (language === 'python') mode = 'python';
+            if (language === 'java') mode = 'text/x-java';
+            if (language === 'cpp') mode = 'text/x-c++src';
+            if (language === 'ruby') mode = 'ruby';
+
+            editor.setOption('mode', mode);
+        }
+
+        // 提交代码函数
+        async function submitCode() {
+            const code = inputBuffer;
+            const language = languageSelect.value;  // 获取选中的语言
+
+            if (code.trim() === '') {
+                alert('Please enter some code before submitting.');
+                return;
+            }
+
+            isSubmitting = true;
+
+            // 显示加载状态
+            responseDiv.innerHTML = '<div class="loading"></div> Submitting code...';
+
+            try {
+                const response = await fetch('/api/v1.5/review_with_language', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ code: code, language: language })  // 将代码传递给后端
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status}`);
+                }
+
+                const data = await response.json();
+                responseDiv.innerHTML = `<strong>AI Review:</strong><br>${data.review}`;
+            } catch (error) {
+                console.error('Error submitting code:', error);
+                responseDiv.innerHTML = 'Error occurred while submitting the code. Please try again later.';
+            } finally {
+                isSubmitting = false;
+                editor.setOption('readOnly', false);  // 恢复编辑器
+
+                // 提交后，增加提交计数
+                submissionCount++;
+                updateThresholdDisplay();
+            }
+        }
+
+        // 更新页面中的调试信息
+        function updateThresholdDisplay() {
+            spaceThresholdDisplay.textContent = spaceThreshold;
+            lineThresholdDisplay.textContent = lineThreshold;
+            submissionCountDisplay.textContent = submissionCount;
+        }
+    </script>
+</body>
+</html>
